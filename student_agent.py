@@ -1,6 +1,12 @@
 import torch
 import torch.nn as nn
 import numpy as np
+import cv2
+from collections import deque
+
+# 常數定義
+FEATURE_SIZE = 84
+NUM_STACK = 4
 
 # Dueling DQN 網路結構，與 train.py 一致
 class DuelingDQN(nn.Module):
@@ -41,12 +47,33 @@ class DuelingDQN(nn.Module):
 class Agent:
     def __init__(self):
         self.device = 'cpu'  # 作業要求在 CPU 上運行
-        self.model = DuelingDQN(input_shape=(4, 84, 84), n_actions=12).to(self.device)
-        self.model.load_state_dict(torch.load("model.pth", map_location=self.device))
+        self.model = DuelingDQN(input_shape=(NUM_STACK, FEATURE_SIZE, FEATURE_SIZE), n_actions=12).to(self.device)
+        self.model.load_state_dict(torch.load("model.pth", map_location=self.device, weights_only=True))
         self.model.eval()  # 設置為評估模式
+        self.frame_stack = deque(maxlen=NUM_STACK)  # 用於儲存 4 幀
+        # 初始化 frame_stack 以填充零幀
+        zero_frame = np.zeros((FEATURE_SIZE, FEATURE_SIZE), dtype=np.float32)
+        for _ in range(NUM_STACK):
+            self.frame_stack.append(zero_frame)
+
+    def _preprocess_observation(self, obs):
+        """將原始 RGB 觀察預處理為與訓練相同的格式"""
+        obs = obs[31:217, 0:248]  # 裁剪
+        obs = cv2.cvtColor(obs, cv2.COLOR_RGB2GRAY)  # 轉為灰度
+        obs = cv2.resize(obs, (FEATURE_SIZE, FEATURE_SIZE), interpolation=cv2.INTER_AREA)  # 調整大小
+        obs = cv2.Canny(obs, 100, 200)  # 應用 Canny 邊緣檢測
+        obs = obs.astype(np.float32) / 255.0  # 標準化
+        return obs
 
     def act(self, observation):
-        observation = torch.tensor(np.array(observation), device=self.device).float().unsqueeze(0)  # 添加批次維度
+        # 預處理當前觀察
+        processed_frame = self._preprocess_observation(observation)
+        # 將處理後的幀添加到 frame_stack
+        self.frame_stack.append(processed_frame)
+        # 將 frame_stack 轉為堆疊的 numpy 數組，形狀為 (4, 84, 84)
+        stacked_frames = np.stack(self.frame_stack, axis=0)
+        # 轉為 PyTorch 張量並添加批次維度
+        observation = torch.tensor(stacked_frames, device=self.device).float().unsqueeze(0)  # 形狀: [1, 4, 84, 84]
         with torch.no_grad():
             q_values = self.model(observation)
         return torch.argmax(q_values[0]).item()
