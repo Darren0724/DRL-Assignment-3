@@ -54,6 +54,8 @@ class Agent:
         obs = obs[31:217, 0:248]  # 裁剪
         obs = cv2.cvtColor(obs, cv2.COLOR_RGB2GRAY)  # 轉為灰度
         obs = cv2.resize(obs, (self.feature_size, self.feature_size), interpolation=cv2.INTER_AREA)  # 調整大小
+        # Convert to uint8 for Canny edge detection
+        obs = obs.astype(np.uint8)
         obs = cv2.Canny(obs, 100, 200)  # Canny 邊緣檢測
         obs = obs.astype(np.float32) / 255.0  # 標準化
         return obs
