@@ -52,20 +52,31 @@ class Agent:
         # Ensure input is uint8 for OpenCV compatibility
         if obs.dtype == np.float32 or obs.dtype == np.float64:
             obs = (obs * 255).clip(0, 255).astype(np.uint8)
-        obs = obs[31:217, 0:248]  # 裁剪
-        obs = cv2.cvtColor(obs, cv2.COLOR_RGB2GRAY)  # 轉為灰度
-        obs = cv2.resize(obs, (self.feature_size, self.feature_size), interpolation=cv2.INTER_AREA)  # 調整大小
-        obs = obs.astype(np.float32) / 255.0  # 標準化
+        obs = obs[31:217, 0:248]  # Crop
+        obs = cv2.cvtColor(obs, cv2.COLOR_RGB2GRAY)  # Convert to grayscale
+        obs = cv2.resize(obs, (self.feature_size, self.feature_size), interpolation=cv2.INTER_AREA)  # Resize
+        obs = obs.astype(np.uint8)  # Ensure uint8 for Canny
+        obs = cv2.Canny(obs, 100, 200)  # Apply Canny edge detection
+        obs = obs.astype(np.float32) / 255.0  # Normalize
         return obs
 
     def act(self, observation):
+        # Process raw observation (240, 256, 3) to (84, 84)
         processed_obs = self._preprocess_observation(observation)
+        # Append to frame stack
         self.frame_stack.append(processed_obs)
+        # Repeat first frame if stack is not full
         while len(self.frame_stack) < 4:
             self.frame_stack.append(processed_obs)
+        # Stack frames to (4, 84, 84)
         stacked_frames = np.stack(self.frame_stack, axis=0)
+        # Convert to tensor with batch dimension
         observation = torch.tensor(stacked_frames, device=self.device).float().unsqueeze(0)
         with torch.no_grad():
             q_values = self.model(observation)
         return torch.argmax(q_values[0]).item()
-    
+
+    def load_model(self, model_path):
+        self.model.load_state_dict(torch.load(model_path, map_location=self.device, weights_only=True))
+        self.model.eval()
+        print(f"Model loaded from {model_path}")
