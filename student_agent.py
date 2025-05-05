@@ -1,8 +1,14 @@
+import gym
 import torch
 import torch.nn as nn
 import numpy as np
 import cv2
 from collections import deque
+from gym_super_mario_bros.actions import COMPLEX_MOVEMENT
+
+FEATURE_SIZE = 84
+STACK_SIZE = 4
+SKIP_FRAMES = 4
 
 class DuelingDQN(nn.Module):
     def __init__(self, input_shape, n_actions):
@@ -35,48 +41,50 @@ class DuelingDQN(nn.Module):
         conv_out = self.conv(x).view(x.size()[0], -1)
         value = self.fc_value(conv_out)
         advantage = self.fc_advantage(conv_out)
-        q_values = value + (advantage - advantage.mean(dim=1, keepdim=True))
-        return q_values
+        return value + (advantage - advantage.mean(dim=1, keepdim=True))
 
-class Agent:
+def preprocess(obs):
+    obs = obs[31:217, 0:248]
+    obs = cv2.cvtColor(obs, cv2.COLOR_RGB2GRAY)
+    obs = cv2.resize(obs, (FEATURE_SIZE, FEATURE_SIZE), interpolation=cv2.INTER_AREA)
+    obs = cv2.Canny(obs, 100, 200)
+    obs = obs.astype(np.float32) / 255.0
+    return obs
+
+class Agent(object):
     def __init__(self):
-        self.device = 'cpu'
-        self.model = DuelingDQN(input_shape=(4, 84, 84), n_actions=12).to(self.device)
-        self.model.load_state_dict(torch.load("model.pth", map_location=self.device, weights_only=True))
-        self.model.eval()
-        self.frame_stack = deque(maxlen=4)
-        self.feature_size = 84
-        print("Agent initialized and model loaded.")
+        self.action_space = gym.spaces.Discrete(len(COMPLEX_MOVEMENT))
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    def _preprocess_observation(self, obs):
-        # Ensure input is uint8 for OpenCV compatibility
-        if obs.dtype == np.float32 or obs.dtype == np.float64:
-            obs = (obs * 255).clip(0, 255).astype(np.uint8)
-        obs = obs[31:217, 0:248]  # Crop
-        obs = cv2.cvtColor(obs, cv2.COLOR_RGB2GRAY)  # Convert to grayscale
-        obs = cv2.resize(obs, (self.feature_size, self.feature_size), interpolation=cv2.INTER_AREA)  # Resize
-        obs = obs.astype(np.uint8)  # Ensure uint8 for Canny
-        obs = cv2.Canny(obs, 100, 200)  # Apply Canny edge detection
-        obs = obs.astype(np.float32) / 255.0  # Normalize
-        return obs
+        self.model = DuelingDQN((STACK_SIZE, FEATURE_SIZE, FEATURE_SIZE), self.action_space.n).to(self.device)
+        self.model.load_state_dict(torch.load("model.pth", map_location=self.device))
+        self.model.eval()
+
+        self.frame_stack = deque(maxlen=STACK_SIZE)
+        for _ in range(STACK_SIZE):
+            self.frame_stack.append(np.zeros((FEATURE_SIZE, FEATURE_SIZE), dtype=np.float32))
+
+        self.skip_count = 0
+        self.last_action = 0
+        self.epsilon = 0.1  # 10% 機率執行隨機行為
 
     def act(self, observation):
-        # Process raw observation (240, 256, 3) to (84, 84)
-        processed_obs = self._preprocess_observation(observation)
-        # Append to frame stack
-        self.frame_stack.append(processed_obs)
-        # Repeat first frame if stack is not full
-        while len(self.frame_stack) < 4:
-            self.frame_stack.append(processed_obs)
-        # Stack frames to (4, 84, 84)
-        stacked_frames = np.stack(self.frame_stack, axis=0)
-        # Convert to tensor with batch dimension
-        observation = torch.tensor(stacked_frames, device=self.device).float().unsqueeze(0)
-        with torch.no_grad():
-            q_values = self.model(observation)
-        return torch.argmax(q_values[0]).item()
+        processed = preprocess(observation)
+        self.frame_stack.append(processed)
 
-    def load_model(self, model_path):
-        self.model.load_state_dict(torch.load(model_path, map_location=self.device, weights_only=True))
-        self.model.eval()
-        print(f"Model loaded from {model_path}")
+        if self.skip_count > 0:
+            self.skip_count -= 1
+            return self.last_action
+
+        if np.random.rand() < self.epsilon:
+            action = self.action_space.sample()
+        else:
+            state = np.array(self.frame_stack)
+            state = torch.tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
+            with torch.no_grad():
+                q_values = self.model(state)
+                action = torch.argmax(q_values[0]).item()
+
+        self.last_action = action
+        self.skip_count = SKIP_FRAMES - 1
+        return action
