@@ -52,14 +52,14 @@ class CustomObservationWrapper(gym.ObservationWrapper):
         self.observation_space = gym.spaces.Box(low=0.0, high=1.0, shape=(FEATURE_SIZE, FEATURE_SIZE), dtype=np.float32)
 
     def observation(self, obs):
-        obs = obs[31:217, 0:248]  # 裁剪觀察
-        obs = cv2.cvtColor(obs, cv2.COLOR_RGB2GRAY)  # 轉為灰度
-        obs = cv2.resize(obs, (FEATURE_SIZE, FEATURE_SIZE), interpolation=cv2.INTER_AREA)  # 調整大小
-        obs = cv2.Canny(obs, 100, 200)  # 應用 Canny 邊緣檢測
-        obs = obs.astype(np.float32) / 255.0  # 標準化
+        obs = obs[31:217, 0:248]  
+        obs = cv2.cvtColor(obs, cv2.COLOR_RGB2GRAY)  
+        obs = cv2.resize(obs, (FEATURE_SIZE, FEATURE_SIZE), interpolation=cv2.INTER_AREA)  
+        obs = cv2.Canny(obs, 100, 200)  
+        obs = obs.astype(np.float32) / 255.0  
         return obs
 
-# 跳幀包裝器
+
 class MaxAndSkipEnv(gym.Wrapper):
     def __init__(self, env, skip=4):
         super(MaxAndSkipEnv, self).__init__(env)
@@ -87,7 +87,7 @@ class MaxAndSkipEnv(gym.Wrapper):
         self._obs_buffer[1] = obs
         return obs
 
-# Dueling DQN 網路
+
 class DuelingDQN(nn.Module):
     def __init__(self, input_shape, n_actions):
         super(DuelingDQN, self).__init__()
@@ -122,12 +122,13 @@ class DuelingDQN(nn.Module):
         q_values = value + (advantage - advantage.mean(dim=1, keepdim=True))
         return q_values
 
-# 測試代理
+STEP = 92
+
 class TestAgent:
     def __init__(self, state_space, action_space):
         self.state_space = state_space
         self.action_space = action_space
-        self.device = 'cpu'  # 測試時使用 CPU
+        self.device = 'cpu'  
         self.model = DuelingDQN(state_space, action_space).to(self.device)
         self.model.load_state_dict(torch.load("model.pth", map_location=self.device))
         self.model.eval()
@@ -169,6 +170,11 @@ class Agent(object):
             self.dqn.to(self.device)
         
     def get_action(self, state):
+        if self.steps == 0:
+            self.state, reward, done, info = self.env.step(6) 
+        if self.steps <= STEP:
+            self.current_action = 6
+            return 6
         state = torch.tensor(np.array(state), device=self.device).float().unsqueeze(0)
         with torch.no_grad():
             q_values = self.dqn(state)
@@ -179,6 +185,7 @@ class Agent(object):
         if self.steps % 4 == 0:
             action = self.get_action(self.state)
             self.state, reward, done, info = self.env.step(action) 
+            #self.env.render()
             #print(self.state.shape)
             self.current_action = action
         self.steps += 1
